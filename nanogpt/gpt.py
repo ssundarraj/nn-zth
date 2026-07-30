@@ -17,6 +17,7 @@ device = (
 )
 print(f"using device: {device}")
 eval_iters = 200
+n_embd = 32
 # ------------
 
 '''
@@ -92,14 +93,22 @@ def dbg_input_output(): # to understand the shape of input/outputs
 
 class BigramLanguageModel(nn.Module):
 
-    def __init__(self, vocab_size):
+    def __init__(self):
         super().__init__()
         # each token directly reads off logits for the next token from the lookup table
-        self.token_embedding_table = nn.Embedding(vocab_size, vocab_size)
+        # actually, now  we use an embedding table in between
+        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
+        # each position has its own embedding vector
+        self.positional_embedding_table = nn.Embedding(block_size, n_embd)
+        self.lm_head = nn.Linear(n_embd, vocab_size)
 
     def forward(self, idx, targets=None):
-        # Pluck out a row from the embedding table for every item in the input
-        logits = self.token_embedding_table(idx) # B(atch), T(ime), C(hannel)
+        B, T = idx.shape
+        tok_emb = self.token_embedding_table(idx) # B(atch), T(ime), C(hannel); C = n_embd
+        pos_emb = self.positional_embedding_table(torch.arange(T, device=device)) # T,C
+        x = tok_emb + pos_emb # B,T,C -- broadcasted across batch
+        logits = self.lm_head(x) # B, T, C; C = vocab_size
+
         if targets is None: 
             loss = None
         else:
@@ -129,7 +138,7 @@ class BigramLanguageModel(nn.Module):
         return idx
 
 
-model = BigramLanguageModel(vocab_size).to(device)
+model = BigramLanguageModel().to(device)
 
 # gets loss for multiple batches of each of eval and train splits
 @torch.no_grad()
@@ -229,7 +238,7 @@ def dbg_self_attn_math_trick():
     # uses torch.softmax
     # We will use this version bc weights start at zeros
     # this is a representation of "interaction strength" / "affinity"
-    # we can train on the wei matrix too (I think)
+    # we can train on the wei matrix by training key, value, query
     tril = torch.tril(torch.ones(T, T))
     wei = torch.zeros((T,T))
     wei = wei.masked_fill(tril == 0, float('-inf'))
@@ -237,6 +246,108 @@ def dbg_self_attn_math_trick():
     xbow3 = wei @ x
     print(torch.allclose(xbow2, xbow3))
 # dbg_self_attn_math_trick()
+
+def dbg_self_attn_head():
+    torch.manual_seed(45)
+    B, T, C = 4,8,32
+    # C comes from token embeddings & positional_embedding_table
+    x = torch.randn(B,T,C)
+    tril = torch.tril(torch.ones(T,T))
+
+    # CRUX OF ATTENTION:
+    # diff tokens will find diff other tokens more important
+    # every token will emit 2 vectors: query + key
+    # query = "what am I looking for"
+    # key = "what do I contain"
+    # affinities: dot product of query x key (wei)
+
+    # self attn head
+    head_size = 16 # hyper param
+    key = nn.Linear(C, head_size, bias=False)
+    query = nn.Linear(C, head_size, bias=False)
+    value = nn.Linear(C, head_size, bias=False)
+    # each token produces k, q as discussed above
+    k = key(x)   # B,T,head_size
+    q = query(x) # same shape
+    # communcation between diff tokens via dot product, instead of torch.zeros
+    wei = q @ k.transpose(-2,-1) # (B,T,head_size) @ (B,head_size,T) -> (B,T,T)
+    # For every row of B (batch) we have T,T affinity matrix
+
+    # before mask + softmax
+    print('wei[0] before mask:\n', wei[0])
+    wei = wei.masked_fill(tril == 0, float('-inf'))
+    print('wei[0] with mask:\n', wei[0])
+    wei = F.softmax(wei, dim = 1) 
+    # first batch to viz
+    # each item is the ith token. for token 0, only the first element should be non-zero
+    # for second, first 2 and so on
+    print('wei[0] with softmax:\n', wei[0])
+
+    '''
+    we use v to access wei
+    we can think of `x` as private to this token
+    for a single head, for an item in batch b, and token at pos t:
+        x[b, t]  = its current 32-number representation
+        q[b, t]  = “what information am I looking for?”
+        k[b, t]  = “what kind of information do I offer?”
+        v[b, t]  = “if another token chooses me, what information do I send it?”
+
+    The whole flow is:
+    x
+    ├─ query(x) → decides what each token wants
+    ├─ key(x)   → decides what each token can be matched on
+    └─ value(x) → decides what each token sends
+
+    query · key → wei (who should listen to whom?)
+    mask + softmax → normalized causal attention weights
+    wei · value → out (the retrieved, mixed information)
+    '''
+    v = value(x) 
+    out = wei @ v
+    print(out.shape) # B,T,head_size
+    '''
+    1/ 
+    attn is communcation mechanism
+    can think of it as nodes in a DAG. every node has info that is a weighted sum of nodes
+    pointing to it
+    in our case (self attn):
+        first node is pointed to by itself
+        second pointed to by first and itself
+        third by second, first, itself
+        ... etc
+
+    2/
+    there's no notion of space in the attention mechanism
+    so we need to introduce additional positional information
+    diff from convolution bc the layout is predefined
+
+    3/ 
+    elements across batches don't talk to each other
+    we use batches to process things in parallel
+
+    4/
+    in language modeling we don't allow future tokens to communicate with past tokens
+    but not necessary to be the case
+    eg for sentiment analysis with transformer you might want all tokens to talk to each other
+    we will delete the masked fill stuff (aka _encoder block_)
+    here we are using _decoder block_
+    attn supports arbitrary communcation
+
+    5/ 
+    there is smth called cross attn
+    in encoder-decoder transformers, queries are produced from X but keys,values can be from a diff
+    source
+    eg translation?
+
+    6/
+    Attention is all you need paper does "scaled attention"
+    important normalization
+    wei.var() is on the order of head_size
+    we do wei = wei * (1/sqrt(head_size))
+    lowers wei.var() to ~1
+    if wei has high variance (big numbers), softmax will converge to one-hot vectors
+    '''
+# dbg_self_attn_head()
 
 
 # In make more we use stochastic descent but Adam optimizer works better
