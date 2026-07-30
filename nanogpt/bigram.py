@@ -159,6 +159,85 @@ def dbg_generate_dims(): # use with smaller block_size to understand what's goin
     print(decode(model.generate(idx, max_new_tokens=100)[0].tolist()))
 # dbg_generate_dims()
 
+'''
+Mathematical trick for efficient self-attention impl
+
+we have 8 tokens in a batch that don't talk to each other but we need to couple them
+we need to have the token at ith location talk to the prev tokens (i-1, i-2, ...)
+simplest way is to average the prev tokens (incl token i)
+    becomes feature vec that summarizes token i in context 
+    quite lossy, eg loses spatial arrangement - will deal with this later
+'''
+def dbg_self_attn_math_trick():
+    torch.manual_seed(11)
+    B, T, C = 4, 8, 2
+    x = torch.randn(B,T,C)
+    print(x.shape)
+
+    # inefficient way::
+    # We want x[b, t] = mean_{i<=t} x[b, i]
+    xbow = torch.zeros((B, T, C)) # bow = bag of words
+    for b in range(B):
+      for t in range(T):
+          xprev = x[b, :t+1]  # (t, C)
+          xbow[b, t] = torch.mean(xprev, 0)
+
+    print(x[0][0]);print(xbow[0][0]) # these should be equal bc we avg only one token
+    print('--')
+    print(x[0][1]);print(xbow[0][1]) # NOT be equal, xbow is avg of first and second token
+
+    # more efficient way ::
+
+    def dbg_tril_mean():
+        # tril workings + mat mul
+        a = torch.tril(torch.ones(3,3)) # lower triangular ones
+        b = torch.randint(0, 10, (3,2)).float()
+        c = a @ b
+        print(a)
+        print(b)
+        # each row of c has the running sum for each batch
+        print(c)
+        print(torch.equal(c[0], b[0]))
+        print(torch.equal(c[1], b[:2].sum(dim=0)))
+        print(torch.equal(c[2], b[:3].sum(dim=0)))
+
+        # prev was sum, this is mean
+        a = torch.tril(torch.ones(3,3)) # lower triangular ones
+        a = a / torch.sum(a, 1, keepdim=True) # <---- mean here bc the ones are now mean
+        b = torch.randint(0, 10, (3,2)).float()
+        c = a @ b
+        print(a)
+        print(b)
+        print(c)
+        print(torch.allclose(c[0], b[0]))
+        print(torch.allclose(c[1], b[:2].mean(dim=0)))
+        print(torch.allclose(c[2], b[:3].mean(dim=0)))
+    # dbg_tril_mean()
+
+    # now with the B, T, C example above
+    # i.e. do the above for the entire batch
+    wei = torch.tril(torch.ones(T, T))
+    wei = wei / wei.sum(1, keepdim=True)
+    print(wei)
+
+    # (T,T) @ (B, T , C) --> (B,T,T) @ (B,T,C)  -- torch adds the dim
+    # (B,T,T) @ (B,T,C) -- multiplies for each batch --> (B,T,C)
+    xbow2 = wei @ x
+    print(torch.allclose(xbow, xbow2))
+
+    # V3 xbow:
+    # uses torch.softmax
+    # We will use this version bc weights start at zeros
+    # this is a representation of "interaction strength" / "affinity"
+    # we can train on the wei matrix too (I think)
+    tril = torch.tril(torch.ones(T, T))
+    wei = torch.zeros((T,T))
+    wei = wei.masked_fill(tril == 0, float('-inf'))
+    wei = F.softmax(wei, dim = 1) # same as prev wei
+    xbow3 = wei @ x
+    print(torch.allclose(xbow2, xbow3))
+# dbg_self_attn_math_trick()
+
 
 # In make more we use stochastic descent but Adam optimizer works better
 # We can set lr to 1e-3 (quite high) bc our model is small
