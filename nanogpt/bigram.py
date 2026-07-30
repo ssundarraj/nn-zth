@@ -5,17 +5,18 @@ from torch.nn import functional as F
 torch.manual_seed(1337)
 
 # hyperparameters
-batch_size = 64 # how many independent sequences will we process in parallel?
-block_size = 256 # what is the maximum context length for predictions?
-
+batch_size = 32 # how many independent sequences will we process in parallel?
+block_size = 8 # what is the maximum context length for predictions?
+max_iters = 3000
+eval_interval = 300
+learning_rate = 1e-2
 device = (
     "cuda" if torch.cuda.is_available()
     # else "mps" if torch.backends.mps.is_available()
     else "cpu"
 )
 print(f"using device: {device}")
-
-
+eval_iters = 200
 # ------------
 
 '''
@@ -24,8 +25,6 @@ reference code for video: https://github.com/karpathy/ng-video-lecture
 finished code: https://github.com/karpathy/build-nanogpt
 '''
 
-
-# wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
 with open('input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
 
@@ -45,10 +44,6 @@ data = torch.tensor(encode(text), dtype=torch.long)
 n = int(0.9*len(data)) # first 90% will be train, rest val
 train_data = data[:n]
 val_data = data[n:]
-
-# TODO
-batch_size = 4
-block_size = 8 
 
 
 # data loading
@@ -74,10 +69,8 @@ for input x[b][0,1,2] -> y[b][2]
 ... etc
 
 we do this because we can train on much more data and also we can run inference on a single token
-
-
 '''
-def dbg_input_output():
+def dbg_input_output(): # to understand the shape of input/outputs
     xb, yb = get_batch('train')
     print(xb.shape, yb.shape)
     print(xb)
@@ -95,6 +88,7 @@ def dbg_input_output():
             print (f"input {context} target {target}")
     return xb.to(device), yb.to(device)
 # dbg_input_output()
+
 
 class BigramLanguageModel(nn.Module):
 
@@ -117,12 +111,14 @@ class BigramLanguageModel(nn.Module):
 
         return logits, loss
 
-    def generate(self, idx, max_new_tokens): # TODO: understand what's going on here
+    def generate(self, idx, max_new_tokens): 
         # idx -> (B,T) (current context)
+        # At this point B is always 1 because we only forward one batch
         for _ in range(max_new_tokens):
           # get the predictions
-          logits, loss = self(idx)
-          # focus only on the last time step
+          logits, _ = self(idx) # (B, T, C)
+          # we get logits for all items in the current block (T) but
+          # we only focus only on the last time step since we need the next char
           logits = logits[:, -1, :] # becomes (B, C)
           # apply softmax to get probabilities
           probs = F.softmax(logits, dim=-1) # (B, C)
@@ -133,12 +129,53 @@ class BigramLanguageModel(nn.Module):
         return idx
 
 
-m = BigramLanguageModel(vocab_size)
-xb, yb = dbg_input_output()
-logits, loss = m(xb, yb)
-print(logits.shape)
-print(loss)
+model = BigramLanguageModel(vocab_size).to(device)
 
-idx = torch.zeros((1,1), dtype = torch.long)
-print(decode(m.generate(idx, max_new_tokens=100)[0].tolist()))
+# gets loss for multiple batches of each of eval and train splits
+@torch.no_grad()
+def estimate_loss():
+  out = {}
+  model.eval()
+  for split in ['train', 'val']:
+      losses = torch.zeros(eval_iters)
+      for k in range(eval_iters):
+          X, Y = get_batch(split)
+          logits, loss = model(X, Y)
+          losses[k] = loss.item()
+      out[split] = losses.mean()
+  model.train()
+  return out
+
+
+def dbg_generate_dims(): # use with smaller block_size to understand what's going on in generate
+    xb, yb = dbg_input_output()
+
+    logits, loss = model(xb, yb)
+
+    print(logits.shape)
+    print(loss)
+
+    idx = torch.zeros((1,1), dtype = torch.long)
+    print(decode(model.generate(idx, max_new_tokens=100)[0].tolist()))
+# dbg_generate_dims()
+
+
+# In make more we use stochastic descent but Adam optimizer works better
+# We can set lr to 1e-3 (quite high) bc our model is small
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+
+for iter in range(max_iters):
+    if iter % eval_interval == 0:
+        losses = estimate_loss()
+        print(f"step {iter}: {losses}")
+
+    xb, yb = get_batch('train')
+
+    logits, loss = model(xb, yb)
+    optimizer.zero_grad(set_to_none=True)
+    loss.backward()
+    optimizer.step()
+
+ctx = torch.zeros((1,1), dtype = torch.long).to(device)
+print(decode(model.generate(ctx, max_new_tokens=1000)[0].tolist()))
 
