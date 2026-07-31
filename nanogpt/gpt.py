@@ -169,6 +169,16 @@ residual blocks are initialized in the beginning such that they contribute very 
   but we don't do this yet
 during optimization they come online over time
 dramatically helps
+
+2/
+layer norm
+similar to batch norm but we normalize rows instead of columns
+computation doen't span cross batches!
+very easy to modify BatchNorm1d to LayerNorm (couple of lines see vid)
+but can use nn.LayerNorm
+in paper, Add & Norm used after self attn and after ffwd
+but now people typically put it before those two
+   key departure from paper used commonly today
 '''
 class Block(nn.Module):
     def __init__(self, n_embd, n_head):
@@ -176,10 +186,12 @@ class Block(nn.Module):
         head_size = n_embd // n_head
         self.sa_heads = MultiHeadAttention(n_head, head_size) 
         self.ffwd = FeedForward(n_embd)
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln2 = nn.LayerNorm(n_embd)
 
     def forward(self, x):
-        x = x + self.sa_heads(x)
-        x = x + self.ffwd(x)
+        x = x + self.sa_heads(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
         return x
 
 
@@ -200,6 +212,7 @@ class BigramLanguageModel(nn.Module):
             Block(n_embd, n_head=4),
             Block(n_embd, n_head=4),
             Block(n_embd, n_head=4),
+            nn.LayerNorm(n_embd),
         )
 
         # language modeling head
