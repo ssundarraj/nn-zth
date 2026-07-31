@@ -107,7 +107,7 @@ class Head(nn.Module):
         k = self.key(x)   
         q = self.query(x) 
         # wei - affinities
-        wei = q @ k.transpose(-2,-1) * C**-0.5 # normalization
+        wei = q @ k.transpose(-2,-1) * k.shape[-1]**-0.5 # normalization
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # (B, T, T)
         wei = F.softmax(wei, dim=-1) 
         # aggregate
@@ -319,7 +319,7 @@ def dbg_self_attn_head():
     print('wei[0] before mask:\n', wei[0])
     wei = wei.masked_fill(tril == 0, float('-inf'))
     print('wei[0] with mask:\n', wei[0])
-    wei = F.softmax(wei, dim = 1) 
+    wei = F.softmax(wei, dim =-1) 
     # first batch to viz
     # each item is the ith token. for token 0, only the first element should be non-zero
     # for second, first 2 and so on
