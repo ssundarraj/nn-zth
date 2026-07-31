@@ -18,6 +18,17 @@ device = (
 print(f"using device: {device}")
 eval_iters = 200
 n_embd = 32
+n_layer = 4
+n_head = 4
+
+'''
+randomly prevents some nodes from communicating
+takes NN and randomly shuts off some subset of neurons on each fwd/backward pass
+  this changes every fwd/backward pass
+at test time everything is enabled
+regularization technique that prevents overfitting
+'''
+dropout = 0.2
 # ------------
 
 '''
@@ -102,6 +113,8 @@ class Head(nn.Module):
         # no training for buffers
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
 
+        self.dropout = nn.Dropout(dropout)
+
     def forward(self, x):
         B, T, C = x.shape
         k = self.key(x)   
@@ -110,6 +123,7 @@ class Head(nn.Module):
         wei = q @ k.transpose(-2,-1) * k.shape[-1]**-0.5 # normalization
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # (B, T, T)
         wei = F.softmax(wei, dim=-1) 
+        wei = self.dropout(wei)
         # aggregate
         v = self.value(x) 
         out = wei @ v
@@ -130,6 +144,7 @@ class FeedForward(nn.Module):
             nn.Linear(n_embd, 4 * n_embd), # multiply by 4 here bc paper does it but why?
             nn.ReLU(),
             nn.Linear(4 * n_embd, n_embd), # projection
+            nn.Dropout(dropout),
         )
 
     def forward(self, x):
@@ -145,11 +160,13 @@ class MultiHeadAttention(nn.Module):
         # proj learns how to mix head outputs together before returning them to the residual
         # stream
         self.proj = nn.Linear(n_heads * head_size, n_embd)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         # run all the heads and concat the last dim
         out = torch.cat([h(x) for h in self.heads], dim=-1)
         out = self.proj(out)
+        out = self.dropout(out)
         return out
 
 '''
@@ -208,12 +225,9 @@ class BigramLanguageModel(nn.Module):
 
         # Blocks of self attn
         self.blocks = nn.Sequential(
-            Block(n_embd, n_head=4),
-            Block(n_embd, n_head=4),
-            Block(n_embd, n_head=4),
-            Block(n_embd, n_head=4),
-            nn.LayerNorm(n_embd),
+            *[Block(n_embd, n_head=n_head) for _ in range(n_layer)]
         )
+        self.ln_f = nn.LayerNorm(n_embd) # final layer norm
 
         # language modeling head
         self.lm_head = nn.Linear(n_embd, vocab_size)
@@ -225,6 +239,7 @@ class BigramLanguageModel(nn.Module):
         x = tok_emb + pos_emb # B,T,C -- broadcasted across batch
 
         x = self.blocks(x)
+        x = self.ln_f(x)
 
         logits = self.lm_head(x) # B, T, C; C = vocab_size
 
@@ -488,6 +503,7 @@ for iter in range(max_iters):
     loss.backward()
     optimizer.step()
 
-ctx = torch.zeros((1,1), dtype = torch.long).to(device)
-print(decode(model.generate(ctx, max_new_tokens=1000)[0].tolist()))
-
+model.eval()
+ctx = torch.zeros((1, 1), dtype=torch.long, device=device)
+with torch.no_grad():
+    print(decode(model.generate(ctx, max_new_tokens=1000)[0].tolist()))
