@@ -115,6 +115,27 @@ class Head(nn.Module):
         out = wei @ v
         return out
 
+'''
+attention paper also has cross attention to an encoder which we aren't implementing here
+the paper also has feed forward after the multi head attention and the entire thing is repeated
+feed fwd is an MLP
+
+gives the model more time to "think" about the attention
+this is per token/node
+'''
+class FeedForward(nn.Module):
+    def __init__(self, n_embd):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, n_embd),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+# kind of like group convolution
 class MultiHeadAttention(nn.Module):
 
     def __init__(self, n_heads, head_size):
@@ -137,6 +158,8 @@ class BigramLanguageModel(nn.Module):
         self.positional_embedding_table = nn.Embedding(block_size, n_embd)
         # self attn head
         self.sa_heads = MultiHeadAttention(4, n_embd//4) # 4 heads, of head_size 8 each -> 32 output
+
+        self.ffwd = FeedForward(n_embd)
         # language modeling head
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
@@ -146,6 +169,7 @@ class BigramLanguageModel(nn.Module):
         pos_emb = self.positional_embedding_table(torch.arange(T, device=device)) # T,C
         x = tok_emb + pos_emb # B,T,C -- broadcasted across batch
         x = self.sa_heads(x) # apply one head of self attn
+        x = self.ffwd(x)
         logits = self.lm_head(x) # B, T, C; C = vocab_size
 
         if targets is None: 
