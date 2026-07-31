@@ -127,8 +127,9 @@ class FeedForward(nn.Module):
     def __init__(self, n_embd):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embd, n_embd),
+            nn.Linear(n_embd, 4 * n_embd), # multiply by 4 here bc paper does it but why?
             nn.ReLU(),
+            nn.Linear(4 * n_embd, n_embd), # projection
         )
 
     def forward(self, x):
@@ -141,11 +142,34 @@ class MultiHeadAttention(nn.Module):
     def __init__(self, n_heads, head_size):
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(n_heads)])
+        # proj learns how to mix head outputs together before returning them to the residual
+        # stream
+        self.proj = nn.Linear(n_heads * head_size, n_embd)
 
     def forward(self, x):
         # run all the heads and concat the last dim
-        return torch.cat([h(x) for h in self.heads], dim=-1)
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
+        out = self.proj(out)
+        return out
 
+'''
+NN getting big so training not great, need to optimize
+
+1/ 
+skip/residual connections. diagrams:
+https://medium.com/data-science/residual-blocks-building-blocks-of-resnet-fd90ca15d6ec
+skip conn with addition from the previous features
+see second diagram:
+computation happens from top to bottom
+fork off from pathway, do some computation and then join back using addition
+
+useful bc addition distributes gradients equally from all branches
+"gradient superhighway" that goes from supervision to input
+residual blocks are initialized in the beginning such that they contribute very little 
+  but we don't do this yet
+during optimization they come online over time
+dramatically helps
+'''
 class Block(nn.Module):
     def __init__(self, n_embd, n_head):
         super().__init__()
@@ -154,8 +178,8 @@ class Block(nn.Module):
         self.ffwd = FeedForward(n_embd)
 
     def forward(self, x):
-        x = self.sa_heads(x)
-        x = self.ffwd(x)
+        x = x + self.sa_heads(x)
+        x = x + self.ffwd(x)
         return x
 
 
@@ -170,7 +194,6 @@ class BigramLanguageModel(nn.Module):
         # each position has its own embedding vector
         self.positional_embedding_table = nn.Embedding(block_size, n_embd)
 
-        # NN getting big so training not great, need to optimize
         # Blocks of self attn
         self.blocks = nn.Sequential(
             Block(n_embd, n_head=4),
