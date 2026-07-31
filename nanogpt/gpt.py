@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-torch.manual_seed(1337)
+torch.manual_seed(1337+1)
 
 # hyperparameters
 batch_size = 32 # how many independent sequences will we process in parallel?
@@ -109,11 +109,21 @@ class Head(nn.Module):
         # wei - affinities
         wei = q @ k.transpose(-2,-1) * C**-0.5 # normalization
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # (B, T, T)
-        wei = F.softmax(wei, dim = 1) 
+        wei = F.softmax(wei, dim=-1) 
         # aggregate
         v = self.value(x) 
         out = wei @ v
         return out
+
+class MultiHeadAttention(nn.Module):
+
+    def __init__(self, n_heads, head_size):
+        super().__init__()
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(n_heads)])
+
+    def forward(self, x):
+        # run all the heads and concat the last dim
+        return torch.cat([h(x) for h in self.heads], dim=-1)
 
 
 class BigramLanguageModel(nn.Module):
@@ -126,7 +136,7 @@ class BigramLanguageModel(nn.Module):
         # each position has its own embedding vector
         self.positional_embedding_table = nn.Embedding(block_size, n_embd)
         # self attn head
-        self.sa_head = Head(n_embd)
+        self.sa_heads = MultiHeadAttention(4, n_embd//4) # 4 heads, of head_size 8 each -> 32 output
         # language modeling head
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
@@ -135,7 +145,7 @@ class BigramLanguageModel(nn.Module):
         tok_emb = self.token_embedding_table(idx) # B(atch), T(ime), C(hannel); C = n_embd
         pos_emb = self.positional_embedding_table(torch.arange(T, device=device)) # T,C
         x = tok_emb + pos_emb # B,T,C -- broadcasted across batch
-        x = self.sa_head(x) # apply one head of self attn
+        x = self.sa_heads(x) # apply one head of self attn
         logits = self.lm_head(x) # B, T, C; C = vocab_size
 
         if targets is None: 
