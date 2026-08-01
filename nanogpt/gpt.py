@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -5,21 +7,21 @@ from torch.nn import functional as F
 torch.manual_seed(1337+1)
 
 # hyperparameters
-batch_size = 32 # how many independent sequences will we process in parallel?
-block_size = 8 # what is the maximum context length for predictions?
+batch_size = 64 # how many independent sequences will we process in parallel?
+block_size = 256 # what is the maximum context length for predictions?
 max_iters = 5000
-eval_interval = 300
-learning_rate = 1e-3
+eval_interval = 500
+learning_rate = 3e-4
 device = (
     "cuda" if torch.cuda.is_available()
-    # else "mps" if torch.backends.mps.is_available()
+    else "mps" if torch.backends.mps.is_available()
     else "cpu"
 )
 print(f"using device: {device}")
 eval_iters = 200
-n_embd = 32
-n_layer = 4
-n_head = 4
+n_embd = 384
+n_layer = 6
+n_head = 6
 
 '''
 randomly prevents some nodes from communicating
@@ -491,10 +493,20 @@ def dbg_self_attn_head():
 # We can set lr to 1e-3 (quite high) bc our model is small
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
+num_params = sum(p.numel() for p in model.parameters())
+print(f"{num_params:,} parameters")
+
+
+print(f"training started: {datetime.now().astimezone().isoformat(timespec='seconds')}")
 for iter in range(max_iters):
-    if iter % eval_interval == 0:
+    timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    if iter % 100 == 0:
+        print(f"{timestamp} step {iter}")
+    # if iter % eval_interval == 0:
+    if iter == max_iters - 1:
         losses = estimate_loss()
-        print(f"step {iter}: {losses}")
+        timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+        print(f"{timestamp} step {iter}: {losses}")
 
     xb, yb = get_batch('train')
 
