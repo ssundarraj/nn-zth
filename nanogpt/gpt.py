@@ -519,3 +519,45 @@ model.eval()
 ctx = torch.zeros((1, 1), dtype=torch.long, device=device)
 with torch.no_grad():
     print(decode(model.generate(ctx, max_new_tokens=1000)[0].tolist()))
+
+'''
+closing notes:
+ 
+1/
+we didn't implement cross attention. we  did a decoder only transformer
+our text isn't conditioned on anything. it just generates a bunch of text
+original paper has encoder-decoder architecture bc it's a translation paper
+input tokens are in a language and decoder is in another language
+encoder reads the first language
+    the encoder doesn't have the tril mask so all tokens can talk to each other
+    the encoder output is brought in using cross attention
+
+2/
+actual nanogpt repo: https://github.com/karpathy/nanogpt
+train.py is similar to our training loop but it has:
+    saving/loading checkpoints/pretrained weights
+    distributed training
+    compiling model
+    learning rate decay
+model.py is very similar to our inference 
+bit more efficient because the heads don't use torch.cat. they are another dimension
+
+3/
+training a model like GPT-3
+2 stages: pretraining, FT
+pretraining: decoder only transformer that just spits out text
+  similar to what we did but much larger
+  we did 10M size model with 300k input tokens
+  GPT-3 did a bunch between 125M - 175B
+  all things much larger: layers, n_embd, n_head, head_size, batch_size
+  300B tokens for training (much larger today for frontier models)
+  nearly identical architecture
+  you just get a document completer here. It's not very helpful
+  it might give you more questions when you give it a question
+FT:
+  aligning it to be an assistant
+  3 steps:
+    train on data in Q&A format (~1000s of examples)
+    let model respond and use that to train reward model
+    use reward model to RL the main model (using PPO?)
+'''
