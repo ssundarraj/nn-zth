@@ -1,6 +1,7 @@
 # Repo: https://github.com/karpathy/build-nanogpt
 
 import sys
+import time
 import tiktoken
 import math
 from dataclasses import dataclass
@@ -58,11 +59,24 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        # Flash attention:
+        # Fusing matmul, mask, softmax, dropout (optional), matmul
+        # Torch compile can't find this kernel fuse
+        # Flash attn does more flops but it's still faster
+        # More mindful of memory heirarchy: fewer r/w ops
+        # For each batch there is a T,T matrix when processing attention (att)
+        # It is never materialized and read/written to GPU's HBM
+        # key trick: incrementally evaluate softmax
+
         # attention (materializes the large (T,T) matrix for all the queries and keys)
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float('-inf'))
-        att = F.softmax(att, dim=-1)
-        y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        # att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+        # att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float('-inf'))
+        # att = F.softmax(att, dim=-1)
+        # y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True) # FLASH
+
+
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
         # output projection
         y = self.c_proj(y)
@@ -234,13 +248,26 @@ train_loader = DataLoaderLite(B=4, T=32)
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 
 for i in range(50):
+    # GPU operations are asynchronous, so synchronize before starting the clock.
+    if device == "mps":
+        torch.mps.synchronize()
+    elif device == "cuda":
+        torch.cuda.synchronize()
+    t0 = time.perf_counter()
+
     x, y = train_loader.next_batch()
     x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
     logits, loss = model(x, y)
     loss.backward()
     optimizer.step()
-    print(f"step {i}, loss: {loss.item()}")
+
+    if device == "mps":
+        torch.mps.synchronize()
+    elif device == "cuda":
+        torch.cuda.synchronize()
+    dt_ms = (time.perf_counter() - t0) * 1000
+    print(f"step {i}, loss: {loss.item():.4f}, time: {dt_ms:.2f}ms")
 sys.exit(0)
 
 
