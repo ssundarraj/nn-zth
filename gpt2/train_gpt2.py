@@ -1,5 +1,6 @@
 # Repo: https://github.com/karpathy/build-nanogpt
 
+import sys
 import math
 from dataclasses import dataclass
 import torch
@@ -95,7 +96,8 @@ class GPT(nn.Module):
       ))
       self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
-    def forward(self, idx):
+
+    def forward(self, idx, targets = None):
         B, T = idx.shape
         assert T < self.config.block_size
         pos = torch.arange(0, T, dtype=torch.long, device = idx.device)
@@ -106,7 +108,11 @@ class GPT(nn.Module):
             x = block(x)
         x = self.transformer.ln_f(x) # type: ignore[operator]
         logits = self.lm_head(x)
-        return logits
+
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits, loss
 
 
     @classmethod
@@ -158,10 +164,17 @@ class GPT(nn.Module):
 
         return model
 
-model = GPT.from_pretrained('gpt2')
-print("weights loaded")
-model.eval()
-model.to('mps')
+device = (
+    "cuda" if torch.cuda.is_available()
+    else "mps" if torch.backends.mps.is_available()
+    else "cpu"
+)
+
+# model = GPT.from_pretrained('gpt2')
+model = GPT(GPTConfig())
+print("using device: ", device)
+model.train()
+model.to(device)
 
 num_return_sequences = 5
 max_length = 30
@@ -171,8 +184,30 @@ enc = tiktoken.get_encoding('gpt2')
 tokens = enc.encode("Hello what's up")
 tokens = torch.tensor(tokens, dtype=torch.long)
 tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
-x = tokens.to('mps')
+x = tokens.to(device)
 
+with open('input.txt', 'r') as f:
+    text = f.read()
+
+text = text[:1000]
+tokens = enc.encode(text)
+B, T = 4, 32
+buf = torch.tensor(tokens[:B*T+1]).to(device)
+x = buf[:-1].view(B, T)
+y = buf[1:].view(B, T)
+
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+
+for i in range(50):
+    optimizer.zero_grad()
+    logits, loss = model(x, y)
+    loss.backward()
+    optimizer.step()
+    print(f"step {i}, loss: {loss.item()}")
+sys.exit(0)
+
+
+model.eval()
 
 # generate! right now x is (B, T) where B = 5, T = 8
 # set the seed to 42
