@@ -227,6 +227,7 @@ model = GPT(GPTConfig())
 print("using device: ", device)
 model.train()
 model.to(device)
+model = torch.compile(model)
 
 train_loader = DataLoaderLite(B=4, T=32)
 
