@@ -305,3 +305,24 @@ for i in range(num_return_sequences):
     tokens = x[i, :max_length].tolist()
     decoded = enc.decode(tokens)
     print(">", decoded)
+
+'''
+Distributed Data Processing
+torch feature
+we use `torchrun` instead of `python train_gpt2.py`
+torchrun will insert some env vars: 
+    WORLD_SIZE = number of processes running
+    RANK = each process runs with a diff rank (pid of sorts?)
+    LOCAL_RANK = used in multi-node setting (rank of GPU on a single node)
+
+We can use RANK to select a cuda device
+master process (usually RANK=0) -> additional work of printing things etc
+we have to modify our code to account for multiprocessing
+    dataloader should give diff chunks of the data to diff processes
+    need to wrap model in DDP torch container:
+        collects gradients across processes, averages them and then distributes them on all
+        processes
+        need to use ddp no_sync or with require_backward_grad in intermediate steps to control this
+        also can use dist.all_reduce to do it manually (gathering loss on master to print)
+
+'''
