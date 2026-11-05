@@ -43,3 +43,22 @@ score. Batches finish their last episode, so they may exceed `--batch-size`.
 Rendering shows every episode. Use `--seed` (default: `0`), `--lr`, or `--env`
 to customize training; supported environments need a flat Box observation
 space and Discrete actions. See `--help` for all options.
+
+## Reward-to-go policy gradient
+
+`policy_grad/rtg.py` follows the [Spinning Up reward-to-go example](https://github.com/openai/spinningup/blob/master/spinup/examples/pytorch/pg_math/2_rtg_pg.py),
+with Gymnasium support and the same dependencies and CLI options as above.
+Instead of weighting every action by the full episode return, it uses the
+sum of rewards from that action onward. For rewards `[1, 1, 1]`, the weights
+are `[3, 2, 1]` instead of `[3, 3, 3]`. There is no discounting.
+
+```bash
+source .venv/bin/activate
+python policy_grad/rtg.py --epochs 2 --batch-size 500
+python policy_grad/rtg.py --epochs 50 --batch-size 5000
+python policy_grad/rtg.py --render --epochs 5 --batch-size 500
+```
+
+`return` still reports average full episode reward, so it can be compared
+with the original example. Rendering shows all training episodes and is slower.
+Each run starts a fresh policy; neither example saves model weights.
