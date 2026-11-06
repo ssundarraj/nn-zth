@@ -62,3 +62,23 @@ python policy_grad/rtg.py --render --epochs 5 --batch-size 500
 `return` still reports average full episode reward, so it can be compared
 with the original example. Rendering shows all training episodes and is slower.
 Each run starts a fresh policy; neither example saves model weights.
+
+## Policy gradient with a value baseline
+
+`policy_grad/valuefn.py` adds the learned baseline described in
+[Baselines in Policy Gradients](https://spinningup.openai.com/en/latest/spinningup/rl_intro3.html#baselines-in-policy-gradients).
+The policy uses `reward_to_go - V(state)` as its weight. A separate value
+network learns to predict reward-to-go by minimizing mean squared error on
+each fresh training batch. Comments starting with `# VALUEFN` mark the changes
+from `rtg.py`.
+
+```bash
+source .venv/bin/activate
+python policy_grad/valuefn.py --epochs 50 --batch-size 5000
+python policy_grad/valuefn.py --render --epochs 5 --batch-size 500
+```
+
+The same dependencies and options apply, plus `--vf-lr` (default `0.01`) and
+`--vf-iters` (default `80` value updates per epoch). `vf_loss` reports the
+value network's MSE after fitting; `return` remains the policy performance
+metric. Each run starts fresh and does not save weights.
