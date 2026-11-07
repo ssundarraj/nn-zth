@@ -82,3 +82,30 @@ The same dependencies and options apply, plus `--vf-lr` (default `0.01`) and
 `--vf-iters` (default `80` value updates per epoch). `vf_loss` reports the
 value network's MSE after fitting; `return` remains the policy performance
 metric. Each run starts fresh and does not save weights.
+
+## PPO-Clip
+
+`policy_grad/ppo.py` extends `valuefn.py` using the clipped objective in
+[Hugging Face's PPO article](https://huggingface.co/blog/deep-rl-ppo).
+Comments starting with `# PPO` highlight the changes: frozen old action
+probabilities, normalized advantages, probability ratios, and multiple policy
+updates with the clipped objective. It also stops policy updates early when
+mean categorical KL exceeds `--target-kl`; clipping alone is not a hard bound.
+
+```bash
+source .venv/bin/activate
+python policy_grad/ppo.py --epochs 50 --batch-size 5000
+python policy_grad/ppo.py --render --epochs 5 --batch-size 500
+python -m unittest policy_grad.test_ppo
+```
+
+Uses the same dependencies. New defaults are `--lr 0.0003`,
+`--clip-ratio 0.2`, `--pi-iters 80`, and `--target-kl 0.01`.
+`pi_steps` counts policy updates, `kl` measures policy change on collected
+states, and `clipfrac` reports the fraction of sampled action ratios outside
+the clip band. `return` remains the performance metric.
+
+This teaching example keeps full episodes, undiscounted Monte Carlo returns,
+and the separate value-network regression from `valuefn.py`. It uses full-batch
+updates, without GAE, an entropy bonus, or value clipping. Time limits end
+returns as in the previous example. Each run starts fresh and does not save weights.
